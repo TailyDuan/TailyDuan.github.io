@@ -1428,28 +1428,74 @@
             expiryText.innerHTML = '';
         }
 
-        function exportTransactionsToExcel() {
-            const wb = XLSX.utils.book_new();
-            const wsData = transactions.map(t => ({
-                '員工號': t.employeeId,
-                '交易類型': t.type,
-                '金額': t.amount,
-                '日期': t.date,
-                '餘額': t.balance,
-                '管理員': t.admin || '未記錄',
-                '備註': t.note || '無備註',
-                '剩餘抽獎次數': bankData[t.employeeId]?.lotteryChances || 0
-            }));
-            const ws = XLSX.utils.json_to_sheet(wsData);
-            XLSX.utils.book_append_sheet(wb, ws, "交易記錄");
-            const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-            const blob = new Blob([wbout], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `all_transactions_${new Date().toISOString().split('T')[0]}.xlsx`;
-            a.click();
-            URL.revokeObjectURL(url);
+        async function exportTransactionsToExcel() {
+            try {
+                // 確保從 Firebase 獲取最新數據
+                const transactionsSnapshot = await get(ref(db, 'transactions'));
+                const transactionsData = transactionsSnapshot.val() || {};
+                const currentTransactions = Object.values(transactionsData);
+                
+                console.log("Exporting transactions:", currentTransactions.length, "records");
+                
+                if (!currentTransactions || currentTransactions.length === 0) {
+                    showError("沒有交易記錄可匯出，資料庫中沒有交易記錄");
+                    return;
+                }
+
+                const wb = XLSX.utils.book_new();
+                const wsData = currentTransactions.map(t => ({
+                    '員工號': String(t.employeeId || ''),
+                    '交易類型': String(t.type || ''),
+                    '金額': Number(t.amount || 0),
+                    '日期': String(t.date || ''),
+                    '餘額': Number(t.balance || 0),
+                    '管理員': String(t.admin || '未記錄'),
+                    '備註': String(t.note || '無備註'),
+                    '剩餘抽獎次數': Number(bankData[t.employeeId]?.lotteryChances || 0)
+                }));
+
+                if (wsData.length === 0) {
+                    showError("處理後的數據為空，無法匯出");
+                    return;
+                }
+
+                // 使用 json_to_sheet 創建工作表，確保包含列標題
+                let ws = XLSX.utils.json_to_sheet(wsData);
+                
+                // 確保工作表有內容
+                if (!ws || !ws['!ref']) {
+                    // 如果工作表為空，手動創建帶標題的工作表
+                    const headers = ['員工號', '交易類型', '金額', '日期', '餘額', '管理員', '備註', '剩餘抽獎次數'];
+                    ws = XLSX.utils.aoa_to_sheet([headers]);
+                }
+
+                XLSX.utils.book_append_sheet(wb, ws, "交易記錄");
+                
+                // 寫入文件
+                const wbout = XLSX.write(wb, { 
+                    bookType: 'xlsx', 
+                    type: 'array',
+                    cellStyles: true
+                });
+                
+                const blob = new Blob([wbout], { 
+                    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+                });
+                
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `all_transactions_${new Date().toISOString().split('T')[0]}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                showSuccessMessage(`成功匯出 ${wsData.length} 筆交易記錄`);
+            } catch (error) {
+                console.error("Error exporting to Excel:", error);
+                showError(`匯出失敗: ${error.message}`);
+            }
         }
 
         function exportEmployeeTransactionsToExcel() {
