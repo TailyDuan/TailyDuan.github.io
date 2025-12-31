@@ -398,7 +398,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>SC 小金庫 11</h1>
+        <h1>SC 小金庫 20</h1>
 
         <!-- 主頁面 -->
         <div id="mainPage" class="page active">
@@ -472,12 +472,6 @@
                     <button onclick="setLotteryChances()">設定抽獎次數</button>
                 </div>
                 <button class="export-btn" onclick="exportTransactionsToExcel()">匯出交易記錄為 Excel</button>
-                <div class="form-group">
-                    <label for="excelFileInput">匯入交易記錄（Excel 文件）</label>
-                    <input type="file" id="excelFileInput" accept=".xlsx,.xls" style="margin: 10px 0; width: 100%; padding: 8px; border: 1px solid #f4c2c2; border-radius: 8px; box-sizing: border-box; background-color: #fff5f7;">
-                    <button class="export-btn" onclick="importTransactionsFromExcel()">匯入 Excel 數據</button>
-                    <p id="importStatus" style="font-size: 0.9rem; color: #6b4e71; margin-top: 5px; text-align: center;"></p>
-                </div>
                 <h3>所有交易記錄</h3>
                 <button class="toggle-btn" onclick="toggleTransactions()">展開交易記錄</button>
                 <table id="transactionTable">
@@ -551,16 +545,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
         import { getDatabase, ref, onValue, set, push, remove, get } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
 
-        // const firebaseConfig = {
-        //     apiKey: "AIzaSyDsBYR7O8Q5_SG0ofYGVvQzmx-anQwntvE",
-        //     authDomain: "sc-bank-6a55c.firebaseapp.com",
-        //     databaseURL: "https://sc-bank-6a55c-default-rtdb.asia-southeast1.firebasedatabase.app",
-        //     projectId: "sc-bank-6a55c",
-        //     storageBucket: "sc-bank-6a55c.firebasestorage.app",
-        //     messagingSenderId: "624717224751",
-        //     appId: "1:624717224751:web:10ab1911eb4ee230509fda",
-        //     measurementId: "G-QTJP7VPZ6H"
-        // };
         const firebaseConfig = {
             apiKey: "AIzaSyA1eha1sUc5lT8KnWjce8btgmwIkLvBgIg",
             authDomain: "sc-bank2026.firebaseapp.com",
@@ -789,20 +773,6 @@
                 document.getElementById('employeeId').value = employeeId;
                 closeEmployeeLogin();
                 showPage('employeePage');
-                
-                // 先從 Firebase 獲取最新數據
-                try {
-                    const bankDataSnapshot = await get(ref(db, 'bankData'));
-                    bankData = bankDataSnapshot.val() || {};
-                    const transactionsSnapshot = await get(ref(db, 'transactions'));
-                    const transactionsData = transactionsSnapshot.val() || {};
-                    transactions = Object.values(transactionsData);
-                    transactionKeys = Object.keys(transactionsData);
-                    console.log("Loaded data on employee login");
-                } catch (error) {
-                    console.error("Error loading data on login:", error);
-                }
-                
                 await checkBalance();
                 
                 // Check for expiring deposits
@@ -845,7 +815,7 @@
             document.getElementById('adminLoginModal').style.display = 'none';
         }
 
-        async function loginAdmin() {
+        function loginAdmin() {
             const username = document.getElementById('adminUsername').value.trim();
             const password = document.getElementById('adminPassword').value.trim();
             const isValidAdmin = ADMIN_CREDENTIALS.some(cred => cred.username === username && cred.password === password);
@@ -855,20 +825,6 @@
                 closeAdminLogin();
                 showPage('adminPage');
                 document.getElementById('transactionTable').style.display = 'none';
-                
-                // 先從 Firebase 獲取最新數據
-                try {
-                    const bankDataSnapshot = await get(ref(db, 'bankData'));
-                    bankData = bankDataSnapshot.val() || {};
-                    const transactionsSnapshot = await get(ref(db, 'transactions'));
-                    const transactionsData = transactionsSnapshot.val() || {};
-                    transactions = Object.values(transactionsData);
-                    transactionKeys = Object.keys(transactionsData);
-                    console.log("Loaded data on admin login:", transactions.length, "transactions");
-                } catch (error) {
-                    console.error("Error loading data on admin login:", error);
-                }
-                
                 updateAdminTable();
             } else {
                 showError("管理員帳號或密碼錯誤");
@@ -990,15 +946,6 @@
                 document.getElementById('adminLotteryChances').textContent = '';
                 return;
             }
-            
-            // 確保從 Firebase 獲取最新數據
-            try {
-                const bankDataSnapshot = await get(ref(db, 'bankData'));
-                bankData = bankDataSnapshot.val() || {};
-            } catch (error) {
-                console.error("Error refreshing bankData:", error);
-            }
-            
             if (await initializeEmployee(employeeId)) {
                 const balance = calculateBalance(employeeId);
                 document.getElementById('adminBalance').value = balance;
@@ -1532,261 +1479,6 @@
             showSuccessMessage("個人交易記錄匯出成功！");
         }
 
-        async function importTransactionsFromExcel() {
-            if (!isAdminLoggedIn) {
-                showError("請先以管理員身分登入");
-                return;
-            }
-
-            const fileInput = document.getElementById('excelFileInput');
-            const statusElement = document.getElementById('importStatus');
-            
-            if (!fileInput.files || fileInput.files.length === 0) {
-                showError("請選擇要匯入的 Excel 文件");
-                return;
-            }
-
-            const file = fileInput.files[0];
-            statusElement.textContent = "正在讀取文件...";
-            statusElement.style.color = "#6b4e71";
-
-            try {
-                const reader = new FileReader();
-                reader.onload = async function(e) {
-                    try {
-                        const data = new Uint8Array(e.target.result);
-                        const workbook = XLSX.read(data, { type: 'array' });
-                        const firstSheetName = workbook.SheetNames[0];
-                        const worksheet = workbook.Sheets[firstSheetName];
-                        const jsonData = XLSX.utils.sheet_to_json(worksheet);
-
-                        if (jsonData.length === 0) {
-                            showError("Excel 文件中沒有數據");
-                            statusElement.textContent = "";
-                            return;
-                        }
-
-                        statusElement.textContent = `找到 ${jsonData.length} 筆記錄，正在匯入...`;
-
-                        // 先從 Firebase 獲取最新數據
-                        const bankDataSnapshot = await get(ref(db, 'bankData'));
-                        bankData = bankDataSnapshot.val() || {};
-                        const transactionsSnapshot = await get(ref(db, 'transactions'));
-                        const existingTransactions = transactionsSnapshot.val() || {};
-
-                        let successCount = 0;
-                        let errorCount = 0;
-                        const errors = [];
-
-                        // 按日期排序，確保按時間順序處理
-                        jsonData.sort((a, b) => {
-                            const dateA = new Date(a['日期'] || 0);
-                            const dateB = new Date(b['日期'] || 0);
-                            return dateA - dateB;
-                        });
-
-                        for (let i = 0; i < jsonData.length; i++) {
-                            const row = jsonData[i];
-                            try {
-                                // 讀取數據（格式與 exportEmployeeTransactionsToExcel 導出完全一致）
-                                const employeeId = String(row['員工號'] || '').trim();
-                                const type = String(row['交易類型'] || '').trim();
-                                const amount = parseFloat(row['金額'] || 0);
-                                const date = String(row['日期'] || '').trim();
-                                const balance = parseFloat(row['餘額'] || 0);
-                                const admin = String(row['管理員'] || currentAdmin || '匯入').trim();
-                                const note = String(row['備註'] || '無備註').trim();
-
-                                // 驗證數據
-                                if (!employeeId || !type || isNaN(amount)) {
-                                    errorCount++;
-                                    errors.push(`第 ${i + 2} 行：數據不完整（員工號：${employeeId}，類型：${type}，金額：${amount}）`);
-                                    continue;
-                                }
-
-                                if (!ALLOWED_EMPLOYEE_IDS.includes(employeeId)) {
-                                    errorCount++;
-                                    errors.push(`第 ${i + 2} 行：員工號 ${employeeId} 不在允許列表中`);
-                                    continue;
-                                }
-
-                                // 初始化員工數據
-                                if (!bankData[employeeId]) {
-                                    bankData[employeeId] = { 
-                                        deposits: [], 
-                                        lotteryChances: 0, 
-                                        lotteryAdmin: null, 
-                                        lotteryNote: null, 
-                                        hasOverdrafted: false 
-                                    };
-                                }
-
-                                // 根據交易類型處理（與系統邏輯完全一致）
-                                if (type === '存款' || type === '抽獎獎金') {
-                                    // 解析日期並創建存款記錄
-                                    let depositDate, expiryDate;
-                                    if (date) {
-                                        const parsedDate = new Date(date);
-                                        if (!isNaN(parsedDate.getTime())) {
-                                            depositDate = parsedDate.toLocaleString('zh-TW');
-                                            expiryDate = new Date(parsedDate);
-                                            expiryDate.setDate(expiryDate.getDate() + 30);
-                                            expiryDate = expiryDate.toISOString();
-                                        } else {
-                                            depositDate = new Date().toLocaleString('zh-TW');
-                                            expiryDate = new Date(new Date().setDate(new Date().getDate() + 30)).toISOString();
-                                        }
-                                    } else {
-                                        depositDate = new Date().toLocaleString('zh-TW');
-                                        expiryDate = new Date(new Date().setDate(new Date().getDate() + 30)).toISOString();
-                                    }
-
-                                    const deposit = {
-                                        amount: amount,
-                                        depositDate: depositDate,
-                                        expiryDate: expiryDate
-                                    };
-
-                                    if (!bankData[employeeId].deposits) {
-                                        bankData[employeeId].deposits = [];
-                                    }
-                                    bankData[employeeId].deposits.push(deposit);
-                                } else if (type === '設定抽獎次數') {
-                                    // 更新抽獎次數
-                                    const currentChances = bankData[employeeId].lotteryChances || 0;
-                                    bankData[employeeId].lotteryChances = currentChances + amount;
-                                    bankData[employeeId].lotteryAdmin = admin;
-                                    bankData[employeeId].lotteryNote = note;
-                                } else if (type === '提款') {
-                                    // 提款需要從存款中扣除（與 handleWithdraw 邏輯一致）
-                                    let remainingAmount = amount;
-                                    let deposits = [...(bankData[employeeId].deposits || [])].sort((a, b) => new Date(a.depositDate) - new Date(b.depositDate));
-                                    let updatedDeposits = [];
-                                    
-                                    for (let deposit of deposits) {
-                                        if (remainingAmount <= 0) {
-                                            updatedDeposits.push(deposit);
-                                            continue;
-                                        }
-                                        const depositAmount = deposit.amount;
-                                        if (depositAmount >= remainingAmount) {
-                                            deposit.amount -= remainingAmount;
-                                            remainingAmount = 0;
-                                            if (deposit.amount > 0) updatedDeposits.push(deposit);
-                                        } else {
-                                            remainingAmount -= depositAmount;
-                                            deposit.amount = 0;
-                                        }
-                                    }
-                                    
-                                    if (remainingAmount > 0) {
-                                        // 超額提款，創建負數存款記錄
-                                        let withdrawDate;
-                                        if (date) {
-                                            const parsedDate = new Date(date);
-                                            if (!isNaN(parsedDate.getTime())) {
-                                                withdrawDate = parsedDate.toLocaleString('zh-TW');
-                                            } else {
-                                                withdrawDate = new Date().toLocaleString('zh-TW');
-                                            }
-                                        } else {
-                                            withdrawDate = new Date().toLocaleString('zh-TW');
-                                        }
-                                        
-                                        updatedDeposits.push({
-                                            amount: -remainingAmount,
-                                            depositDate: withdrawDate,
-                                            expiryDate: null
-                                        });
-                                        bankData[employeeId].hasOverdrafted = true;
-                                    }
-                                    
-                                    bankData[employeeId].deposits = updatedDeposits.filter(d => d.amount !== 0);
-                                }
-
-                                // 保存交易記錄到 Firebase（格式與導出完全一致）
-                                await push(ref(db, 'transactions'), {
-                                    employeeId,
-                                    type,
-                                    amount,
-                                    date: date || new Date().toLocaleString('zh-TW'),
-                                    balance: balance || calculateBalance(employeeId),
-                                    admin: admin || '匯入',
-                                    note: note || '無備註'
-                                });
-
-                                successCount++;
-                            } catch (error) {
-                                errorCount++;
-                                errors.push(`第 ${i + 2} 行：${error.message}`);
-                                console.error(`Error importing row ${i + 2}:`, error);
-                            }
-                        }
-
-                        // 保存所有 bankData 更新
-                        await saveData();
-
-                        // 重新加載數據以更新顯示
-                        const updatedBankDataSnapshot = await get(ref(db, 'bankData'));
-                        bankData = updatedBankDataSnapshot.val() || {};
-                        const updatedTransactionsSnapshot = await get(ref(db, 'transactions'));
-                        const updatedTransactionsData = updatedTransactionsSnapshot.val() || {};
-                        transactions = Object.values(updatedTransactionsData);
-                        transactionKeys = Object.keys(updatedTransactionsData);
-
-                        // 更新顯示
-                        updateAdminTable();
-                        if (isAdminLoggedIn) {
-                            const currentEmployeeId = document.getElementById('adminQueryEmployeeId').value.trim();
-                            if (currentEmployeeId) {
-                                await checkAdminBalance();
-                            }
-                        }
-
-                        // 顯示結果
-                        let message = `匯入完成！成功：${successCount} 筆`;
-                        if (errorCount > 0) {
-                            message += `，失敗：${errorCount} 筆`;
-                            if (errors.length > 0) {
-                                const errorDetails = errors.slice(0, 5).join('\n');
-                                message += `\n錯誤詳情：\n${errorDetails}`;
-                                if (errors.length > 5) {
-                                    message += `\n...還有 ${errors.length - 5} 個錯誤`;
-                                }
-                            }
-                            showError(message);
-                        } else {
-                            showSuccessMessage(message);
-                        }
-                        statusElement.textContent = `匯入完成：成功 ${successCount} 筆，失敗 ${errorCount} 筆`;
-                        statusElement.style.color = errorCount > 0 ? "#d81b60" : "#28a745";
-
-                        // 清空文件輸入
-                        fileInput.value = '';
-
-                    } catch (error) {
-                        console.error("Error processing Excel file:", error);
-                        showError(`處理 Excel 文件時發生錯誤：${error.message}`);
-                        statusElement.textContent = "匯入失敗";
-                        statusElement.style.color = "#d81b60";
-                    }
-                };
-
-                reader.onerror = function() {
-                    showError("讀取文件失敗");
-                    statusElement.textContent = "讀取文件失敗";
-                    statusElement.style.color = "#d81b60";
-                };
-
-                reader.readAsArrayBuffer(file);
-            } catch (error) {
-                console.error("Error reading file:", error);
-                showError(`讀取文件時發生錯誤：${error.message}`);
-                statusElement.textContent = "讀取文件失敗";
-                statusElement.style.color = "#d81b60";
-            }
-        }
-
         // Initialize date and admin table
         updateDate();
         updateAdminTable();
@@ -1810,7 +1502,6 @@
         window.closeLotteryResult = closeLotteryResult;
         window.exportTransactionsToExcel = exportTransactionsToExcel;
         window.exportEmployeeTransactionsToExcel = exportEmployeeTransactionsToExcel;
-        window.importTransactionsFromExcel = importTransactionsFromExcel;
         window.syncEmployeeId = syncEmployeeId;
         window.toggleTransactions = toggleTransactions;
         window.initializeDatabase = initializeDatabase;
