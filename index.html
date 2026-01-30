@@ -549,7 +549,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
-        import { getDatabase, ref, onValue, set, push, remove, get } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
+        import { getDatabase, ref, onValue, set, push, remove, get, update } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
 
         // const firebaseConfig = {
         //     apiKey: "AIzaSyDsBYR7O8Q5_SG0ofYGVvQzmx-anQwntvE",
@@ -1544,44 +1544,6 @@
             showSuccessMessage("個人交易記錄匯出成功！");
         }
 
-        function parseAmount(value) {
-            if (value === null || value === undefined) return NaN;
-            const normalized = String(value).replace(/,/g, '').trim();
-            return parseFloat(normalized);
-        }
-
-        function parseExcelDate(value) {
-            if (!value && value !== 0) return null;
-            if (value instanceof Date && !isNaN(value.getTime())) return value;
-            if (typeof value === 'number' && !isNaN(value)) {
-                const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-                return new Date(excelEpoch.getTime() + value * 86400000);
-            }
-            const parsed = new Date(String(value).trim());
-            return isNaN(parsed.getTime()) ? null : parsed;
-        }
-
-        function normalizeDeposits(employeeId) {
-            const current = bankData[employeeId]?.deposits;
-            if (Array.isArray(current)) return;
-            if (current && typeof current === 'object') {
-                bankData[employeeId].deposits = Object.values(current);
-                return;
-            }
-            bankData[employeeId].deposits = [];
-        }
-
-        function getFirebaseErrorMessage(error) {
-            if (!error) return "未知錯誤";
-            if (error.code === 'PERMISSION_DENIED') {
-                return "權限拒絕，請檢查 Firebase Realtime Database 規則或 firebaseConfig";
-            }
-            if (error.code === 'NETWORK_ERROR') {
-                return "網路錯誤，請檢查網路或 Firebase 連線";
-            }
-            return error.message || String(error);
-        }
-
         async function importTransactionsFromExcel() {
             if (!isAdminLoggedIn) {
                 showError("請先以管理員身分登入");
@@ -1593,13 +1555,6 @@
             
             if (!fileInput.files || fileInput.files.length === 0) {
                 showError("請選擇要匯入的 Excel 文件");
-                return;
-            }
-
-            if (!window.XLSX) {
-                showError("Excel 解析庫未載入，請檢查網路或重新整理頁面");
-                statusElement.textContent = "匯入失敗：Excel 解析庫未載入";
-                statusElement.style.color = "#d81b60";
                 return;
             }
 
@@ -1615,7 +1570,7 @@
                         const workbook = XLSX.read(data, { type: 'array' });
                         const firstSheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[firstSheetName];
-                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
                         if (jsonData.length === 0) {
                             showError("Excel 文件中沒有數據");
@@ -1628,16 +1583,19 @@
                         // 先從 Firebase 獲取最新數據
                         const bankDataSnapshot = await get(ref(db, 'bankData'));
                         bankData = bankDataSnapshot.val() || {};
-                        await get(ref(db, 'transactions'));
+                        const transactionsSnapshot = await get(ref(db, 'transactions'));
+                        const existingTransactions = transactionsSnapshot.val() || {};
 
                         let successCount = 0;
                         let errorCount = 0;
                         const errors = [];
+                        const updates = {};
+                        const touchedEmployees = new Set();
 
                         // 按日期排序，確保按時間順序處理
                         jsonData.sort((a, b) => {
-                            const dateA = parseExcelDate(a['日期']) || new Date(0);
-                            const dateB = parseExcelDate(b['日期']) || new Date(0);
+                            const dateA = new Date(a['日期'] || 0);
+                            const dateB = new Date(b['日期'] || 0);
                             return dateA - dateB;
                         });
 
@@ -1647,11 +1605,9 @@
                                 // 讀取數據（格式與 exportEmployeeTransactionsToExcel 導出完全一致）
                                 const employeeId = String(row['員工號'] || '').trim();
                                 const type = String(row['交易類型'] || '').trim();
-                                const amount = parseAmount(row['金額']);
-                                const dateValue = row['日期'];
-                                const parsedDate = parseExcelDate(dateValue);
-                                const date = parsedDate ? parsedDate.toLocaleString('zh-TW') : String(dateValue || '').trim();
-                                const balance = parseAmount(row['餘額']);
+                                const amount = parseFloat(row['金額'] || 0);
+                                const date = String(row['日期'] || '').trim();
+                                const balance = parseFloat(row['餘額'] || 0);
                                 const admin = String(row['管理員'] || currentAdmin || '匯入').trim();
                                 const note = String(row['備註'] || '無備註').trim();
 
@@ -1678,14 +1634,14 @@
                                         hasOverdrafted: false 
                                     };
                                 }
-                                normalizeDeposits(employeeId);
 
                                 // 根據交易類型處理（與系統邏輯完全一致）
                                 if (type === '存款' || type === '抽獎獎金') {
                                     // 解析日期並創建存款記錄
                                     let depositDate, expiryDate;
                                     if (date) {
-                                        if (parsedDate && !isNaN(parsedDate.getTime())) {
+                                        const parsedDate = new Date(date);
+                                        if (!isNaN(parsedDate.getTime())) {
                                             depositDate = parsedDate.toLocaleString('zh-TW');
                                             expiryDate = new Date(parsedDate);
                                             expiryDate.setDate(expiryDate.getDate() + 30);
@@ -1741,7 +1697,8 @@
                                         // 超額提款，創建負數存款記錄
                                         let withdrawDate;
                                         if (date) {
-                                            if (parsedDate && !isNaN(parsedDate.getTime())) {
+                                            const parsedDate = new Date(date);
+                                            if (!isNaN(parsedDate.getTime())) {
                                                 withdrawDate = parsedDate.toLocaleString('zh-TW');
                                             } else {
                                                 withdrawDate = new Date().toLocaleString('zh-TW');
@@ -1762,15 +1719,17 @@
                                 }
 
                                 // 保存交易記錄到 Firebase（格式與導出完全一致）
-                                await push(ref(db, 'transactions'), {
+                                const transactionRef = push(ref(db, 'transactions'));
+                                updates[`transactions/${transactionRef.key}`] = {
                                     employeeId,
                                     type,
                                     amount,
                                     date: date || new Date().toLocaleString('zh-TW'),
-                                    balance: isNaN(balance) ? calculateBalance(employeeId) : balance,
+                                    balance: balance || calculateBalance(employeeId),
                                     admin: admin || '匯入',
                                     note: note || '無備註'
-                                });
+                                };
+                                touchedEmployees.add(employeeId);
 
                                 successCount++;
                             } catch (error) {
@@ -1780,8 +1739,13 @@
                             }
                         }
 
-                        // 保存所有 bankData 更新
-                        await saveData();
+                        // 保存所有 bankData 更新（只更新有變動的員工，避免覆寫整個節點）
+                        touchedEmployees.forEach(employeeId => {
+                            updates[`bankData/${employeeId}`] = bankData[employeeId];
+                        });
+                        if (Object.keys(updates).length > 0) {
+                            await update(ref(db), updates);
+                        }
 
                         // 重新加載數據以更新顯示
                         const updatedBankDataSnapshot = await get(ref(db, 'bankData'));
@@ -1823,9 +1787,12 @@
 
                     } catch (error) {
                         console.error("Error processing Excel file:", error);
-                        const errorMessage = getFirebaseErrorMessage(error);
-                        showError(`處理 Excel 文件時發生錯誤：${errorMessage}`);
-                        statusElement.textContent = `匯入失敗：${errorMessage}`;
+                        if (error.code === 'PERMISSION_DENIED') {
+                            showError("匯入失敗：Permission denied（請檢查 Firebase Realtime Database 規則是否允許寫入）");
+                        } else {
+                            showError(`處理 Excel 文件時發生錯誤：${error.message}`);
+                        }
+                        statusElement.textContent = "匯入失敗";
                         statusElement.style.color = "#d81b60";
                     }
                 };
@@ -1838,10 +1805,9 @@
 
                 reader.readAsArrayBuffer(file);
             } catch (error) {
-                const errorMessage = getFirebaseErrorMessage(error);
                 console.error("Error reading file:", error);
-                showError(`讀取文件時發生錯誤：${errorMessage}`);
-                statusElement.textContent = `讀取文件失敗：${errorMessage}`;
+                showError(`讀取文件時發生錯誤：${error.message}`);
+                statusElement.textContent = "讀取文件失敗";
                 statusElement.style.color = "#d81b60";
             }
         }
